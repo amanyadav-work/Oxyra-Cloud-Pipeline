@@ -9,24 +9,78 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gabriel-vasile/mimetype"
+	"github.com/segmentio/kafka-go"
 )
 
 const ACCESSKEYID = "005305f3eb765970000000003"           // Your Backblaze B2 Application Key ID
 const SECRETACCESSKEY = "K005E0U9TM8/CJu9o2XZ3eI2WmW64B8" // Your Backblaze B2 Application Key
 const BUCKETNAME = "vercel-clone2"                        // Your B2 Bucket Name
 var PROJECT_ID = os.Getenv("PROJECT_ID")
+var LIVE_URL = fmt.Sprintf("http://%s.localhost:8282", os.Getenv("PROJECT_ID"))
 
 const B2_REGION = "us-east-005"                              // Your Backblaze B2 region
 const B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com" // Your Backblaze B2 endpoint
 
+type KafkaWriter struct {
+	writer *kafka.Writer
+}
+
+func NewKafkaWriter() *KafkaWriter {
+	return &KafkaWriter{
+		writer: &kafka.Writer{
+			Addr:         kafka.TCP("host.docker.internal:9092"),
+			Topic:        "logs",
+			MaxAttempts:  5,                // Retry up to 5 times
+			RequiredAcks: kafka.RequireAll, // Ensure all replicas acknowledge
+			Balancer:     &kafka.LeastBytes{},
+		},
+	}
+}
+
+func (k *KafkaWriter) Write(p []byte) (n int, err error) {
+	msg := kafka.Message{
+		Key: []byte(PROJECT_ID),
+		Value: p,
+	}
+
+	fmt.Println("Attempting to write message to Kafka")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+	defer cancel()
+
+	err = k.writer.WriteMessages(ctx, msg)
+	if err != nil {
+		fmt.Printf("Error writing to Kafka: %v", err)
+	}
+
+	fmt.Println("Message written to Kafka")
+
+	fmt.Printf("%s", p)
+	if err != nil {
+		fmt.Printf("Error printing to stdout: %v", err)
+	}
+	return n, err
+}
+
 func main() {
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered from panic: %v", r)
+		}
+	}()
 	fmt.Println("Executing script.go")
+	kafkaWriter := NewKafkaWriter()
+	log.SetFlags(0) 
+	logWriter := io.MultiWriter(os.Stdout, kafkaWriter)
+	log.SetOutput(logWriter)
 
 	log.Println("PROJECT_ID: ", PROJECT_ID)
 
@@ -161,7 +215,8 @@ func main() {
 		return nil
 	})
 
-	fmt.Println("Build Completed successfully")
+	log.Println("Build Completed successfully")
+	log.Println("View your live deployment at", LIVE_URL)
 }
 
 func uploadToS3(filepath string, originalPath string, client *s3.Client) error {
@@ -192,7 +247,3 @@ func uploadToS3(filepath string, originalPath string, client *s3.Client) error {
 
 	return nil
 }
-
-
-
-
