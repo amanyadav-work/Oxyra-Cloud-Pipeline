@@ -2,14 +2,14 @@ package api
 
 import (
 	"api-server/models"
-	"api-server/routes"
+	// // "api-server/routes"
 	"context"
 	"log"
 
 	"github.com/segmentio/kafka-go"
 )
 
-func StartKafkaConsumer() {
+func StartKafkaConsumer(callback func(log models.Log)) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{"localhost:9093"},
 		Topic:   "logs",
@@ -25,17 +25,11 @@ func StartKafkaConsumer() {
 		}
 
 		log := models.Log{
-			ID:        123,
 			ProjectID: string(msg.Key),
 			Message:   string(msg.Value),
 			Timestamp: msg.Time,
 		}
-
-		routes.SaveLogToDatabase(log)
-
-		routes.PushLogToClients(log)
+		callback(log)
 	}
 
 }
-
-

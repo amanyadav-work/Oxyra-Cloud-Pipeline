@@ -35,7 +35,7 @@ export const UserProvider = ({ children }: UserProviderProps) => {
     url: `/api/user`,
     withAuth: true,
     onSuccess: (result: any) => {
-      setUser(result);
+      setUser(result.user);
       setIsLoading(false);
     },
     onError: (err: any) => {

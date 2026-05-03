@@ -1,8 +1,8 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { verifyToken } from './utils/verifyToken';
 
-const PUBLIC_ONLY_ROUTES: string[] = ['/login', '/signup', '/'];
-const PUBLIC_ROUTES: string[] = [];
+const PUBLIC_ONLY_ROUTES: string[] = ['/login', '/signup'];
+const PUBLIC_ROUTES: string[] = ['/'];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -33,6 +33,6 @@ export async function middleware(req: NextRequest) {
 
 export const config: { matcher: string[] } = {
   matcher: [
-    '/((?!_next(?:/data)?/.*|favicon\.ico|manifest\.json|robots\.txt|service-worker\.js|api/.*|.*\.(?:png|svg|jpg|jpeg|gif|webp|ico|bmp|tiff|avif|webmanifest|json)).*)',
+    '/((?!_next(?:/data)?/.*|favicon\.ico|manifest\.json|robots\.txt|service-worker\.js|api/.*|.*\.(?:png|svg|jpg|jpeg|gif|webp|ico|bmp|tiff|avif|webmanifest|json|mp4|mp3|avi|mov|mkv|flv|webm|wmv|mpg|mpeg|flac|aac|wav|ogv|mp4v|3gp)).*)',
   ],
 };

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
+	"gorm.io/driver/sqlite"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -16,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
@@ -29,7 +32,7 @@ const (
 const PORT = "8282"
 
 func main() {
-
+	DatabaseInit()
 	router := gin.Default()
 	router.Use(cors.Default())
 	router.Any("/*filePath", proxyHandler)
@@ -40,6 +43,46 @@ func main() {
 	}
 }
 
+
+type User struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name      string    `gorm:"size:255;not null" json:"name" binding:"required"`
+	Email     string    `gorm:"unique;size:255;not null" json:"email" binding:"required,email"`
+	Password  string    `gorm:"size:255;not null" json:"password" binding:"required"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+type Project struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	UserID      uint      `gorm:"not null" json:"user_id"`
+	User        User       `gorm:"foreignKey:UserID" json:"user"`
+	Name        string    `gorm:"type:varchar(100);not null" json:"name"`
+	Description string    `gorm:"type:text" json:"description"`
+	URL         string    `gorm:"type:varchar(255);not null" json:"url"`
+	Repo        string    `gorm:"type:varchar(255)" json:"repo"`
+	LastUpdate  time.Time `gorm:"type:timestamp" json:"lastUpdate"`
+	Branch      string    `gorm:"type:varchar(50)" json:"branch"`
+	Status      string    `gorm:"type:varchar(50)" json:"status"`
+	RootDir     string    `gorm:"type:varchar(255)" json:"rootDir"`
+	BuildCmd    string    `gorm:"type:varchar(255)" json:"buildCmd"`
+	OutputDir   string    `gorm:"type:varchar(255)" json:"outputDir"`
+	InstallCmd  string    `gorm:"type:varchar(255)" json:"installCmd"`
+	Subdomain   string    `gorm:"type:varchar(255)" json:"subdomain"`
+	CreatedAt   time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+var DB *gorm.DB
+
+func DatabaseInit() {
+	db, err := gorm.Open(sqlite.Open("../SQLite.DB"), &gorm.Config{})
+	if err != nil {
+		log.Fatal("Failed to connect to database:", err)
+		panic(err)
+	}
+
+	DB = db
+}
+
 func proxyHandler(c *gin.Context) {
 	// Extract the subdomain (part of the request host)
 	parts := strings.Split(c.Request.Host, ".")
@@ -47,6 +90,23 @@ func proxyHandler(c *gin.Context) {
 	if len(parts) > 0 {
 		subdomain = parts[0]
 	}
+
+	if subdomain == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Subdomain is missing in the request"})
+		return
+	}
+
+	var project Project
+	if err := DB.Where("subdomain = ?", subdomain).First(&project).Error; err != nil {
+		// If project is not found
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found for this subdomain"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error retrieving project: %v", err)})
+		}
+		return
+	}
+
 	filePath := c.Param("filePath")
 	filePath = strings.TrimPrefix(filePath, "/")
 
@@ -54,7 +114,7 @@ func proxyHandler(c *gin.Context) {
 		filePath = "index.html"
 	}
 
-	contentType, fileSize, fileContent, err := handleFileRequest(filePath, subdomain)
+	contentType, fileSize, fileContent, err := handleFileRequest(filePath, fmt.Sprintf("%d", project.ID))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to fetch file: %v", err)})
 		return

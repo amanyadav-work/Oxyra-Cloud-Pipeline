@@ -1,27 +1,27 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-type UseFetchOptions = {
+type UseFetchOptions<TPayload = any> = {
   auto?: boolean;
   url?: string;
   method?: string;
-  payload?: any;
+  payload?: TPayload | null;
   headers?: Record<string, string>;
   withAuth?: boolean;
-  onSuccess?: (result: any) => void;
-  onError?: (err: any) => void;
+  onSuccess?: (data: any) => void;
+  onError?: (error: any) => void;
 };
 
-type RefetchOptions = Partial<Omit<UseFetchOptions, 'auto'>>;
+type RefetchOptions<TPayload = any> = Partial<UseFetchOptions<TPayload>>;
 
-type UseFetchReturn<T = any> = {
-  data: T | null;
+type UseFetchReturn<TData = any> = {
+  data: TData | null;
   error: string | null;
   isLoading: boolean;
   refetch: (overrideOptions?: RefetchOptions) => Promise<void>;
 };
 
-export default function useFetch<T = any>({
+export default function useFetch<TData = any, TPayload = any>({
   auto = false,
   url = '',
   method = 'GET',
@@ -30,13 +30,16 @@ export default function useFetch<T = any>({
   withAuth = true,
   onSuccess = () => {},
   onError = () => {},
-}: UseFetchOptions = {}): UseFetchReturn<T> {
-  const [data, setData] = useState<T | null>(null);
+}: UseFetchOptions<TPayload> = {}): UseFetchReturn<TData> {
+  const [data, setData] = useState<TData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Prevent multiple calls for a single webhook/parent trigger
+  const isFetchingRef = useRef(false);
 
   // Keep latest values in refs so refetch() always uses up-to-date info
-  const latestConfigRef = useRef<UseFetchOptions>({
+  const latestConfigRef = useRef({
     url,
     method,
     payload,
@@ -59,29 +62,29 @@ export default function useFetch<T = any>({
     };
   }, [url, method, payload, headers, withAuth, onSuccess, onError]);
 
-  const refetch = useCallback(async (overrideOptions: RefetchOptions = {}) => {
+  const refetch = useCallback(async (overrideOptions: RefetchOptions<TPayload> = {}) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     const {
       url: reqUrl = latestConfigRef.current.url,
       method: reqMethod = latestConfigRef.current.method,
       payload: reqPayload = latestConfigRef.current.payload,
       headers: reqHeaders = latestConfigRef.current.headers,
       withAuth: reqWithAuth = latestConfigRef.current.withAuth,
-      onSuccess: _successCallback,
-      onError: _errorCallback,
+      onSuccess: successCallback = latestConfigRef.current.onSuccess,
+      onError: errorCallback = latestConfigRef.current.onError,
     } = overrideOptions;
 
-    // Always use a defined callback
-    const successCallback = _successCallback ?? latestConfigRef.current.onSuccess ?? (() => {});
-    const errorCallback = _errorCallback ?? latestConfigRef.current.onError ?? (() => {});
-
-    if (!reqUrl) return;
+    if (!reqUrl) {
+      isFetchingRef.current = false;
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
 
     try {
       const finalHeaders = { ...reqHeaders };
-
       const isFormData = reqPayload instanceof FormData;
       if (!isFormData && reqMethod !== 'GET') {
         finalHeaders['Content-Type'] = 'application/json';
@@ -95,8 +98,9 @@ export default function useFetch<T = any>({
           : undefined,
       };
 
+      // ✅ Conditionally include credentials (for HTTP-only auth cookies)
       if (reqWithAuth) {
-        (fetchOptions as any).credentials = 'include';
+        fetchOptions.credentials = 'include';
       }
 
       const response = await fetch(reqUrl, fetchOptions);
@@ -117,6 +121,7 @@ export default function useFetch<T = any>({
       errorCallback(err.fullError || err);
     } finally {
       setIsLoading(false);
+      isFetchingRef.current = false;
     }
   }, []);
 

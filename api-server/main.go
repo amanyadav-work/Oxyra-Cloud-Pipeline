@@ -2,6 +2,7 @@ package main
 
 import (
 	api "api-server/APIs"
+	"api-server/models"
 	routes "api-server/routes"
 	"log"
 
@@ -18,7 +19,11 @@ func main() {
 	}
 
 	routes.DatabaseInit()
-	go api.StartKafkaConsumer()
+	go api.StartKafkaConsumer(func(log models.Log) {
+		routes.SaveLogToDatabase(log)
+		routes.PushLogToClients(log)
+	})
+	
 	startServer()
 	// ticker := time.NewTicker(5 * time.Second)
 	// defer ticker.Stop()
@@ -35,4 +40,3 @@ func main() {
 	// 	}
 	// }()
 }
-

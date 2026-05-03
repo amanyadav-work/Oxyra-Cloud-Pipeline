@@ -19,14 +19,23 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-const ACCESSKEYID = "005305f3eb765970000000003"           // Your Backblaze B2 Application Key ID
-const SECRETACCESSKEY = "K005E0U9TM8/CJu9o2XZ3eI2WmW64B8" // Your Backblaze B2 Application Key
-const BUCKETNAME = "vercel-clone2"                        // Your B2 Bucket Name
+var ACCESSKEYID = os.Getenv("ACCESSKEYID")
+var SECRETACCESSKEY = os.Getenv("SECRETACCESSKEY")
+var BUCKETNAME = os.Getenv("BUCKETNAME")
 var PROJECT_ID = os.Getenv("PROJECT_ID")
-var LIVE_URL = fmt.Sprintf("http://%s.localhost:8282", os.Getenv("PROJECT_ID"))
+var DEPLOY_DOMAIN = os.Getenv("DEPLOY_DOMAIN")
+var B2_REGION = os.Getenv("B2_REGION")
+var B2_ENDPOINT = os.Getenv("B2_ENDPOINT")
 
-const B2_REGION = "us-east-005"                              // Your Backblaze B2 region
-const B2_ENDPOINT = "https://s3.us-east-005.backblazeb2.com" // Your Backblaze B2 endpoint
+// User provided
+var SUBDOMAIN = os.Getenv("SUBDOMAIN")
+var INSTALL_CMD = os.Getenv("INSTALL_CMD")
+var BUILD_CMD = os.Getenv("BUILD_CMD")
+var OUTPUT_DIR = os.Getenv("OUTPUT_DIR")
+var GIT_ROOT_DIR = os.Getenv("GIT_ROOT_DIR")
+
+var LIVE_URL = fmt.Sprintf("%s.%s", SUBDOMAIN, DEPLOY_DOMAIN)
+
 
 type KafkaWriter struct {
 	writer *kafka.Writer
@@ -46,8 +55,9 @@ func NewKafkaWriter() *KafkaWriter {
 
 func (k *KafkaWriter) Write(p []byte) (n int, err error) {
 	msg := kafka.Message{
-		Key: []byte(PROJECT_ID),
+		Key:   []byte(PROJECT_ID),
 		Value: p,
+		
 	}
 
 	fmt.Println("Attempting to write message to Kafka")
@@ -70,23 +80,24 @@ func (k *KafkaWriter) Write(p []byte) (n int, err error) {
 }
 
 func main() {
-
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Recovered from panic: %v", r)
+			log.Printf("[ERROR] Oops! Something went wrong during deployment: %v", r)
 		}
 	}()
-	fmt.Println("Executing script.go")
-	kafkaWriter := NewKafkaWriter()
-	log.SetFlags(0) 
+
+	log.Println("[INFO] Starting your site deployment...")
+
+	kafkaWriter := NewKafkaWriter() // Assuming this is defined elsewhere
+	log.SetFlags(0)
 	logWriter := io.MultiWriter(os.Stdout, kafkaWriter)
 	log.SetOutput(logWriter)
 
-	log.Println("PROJECT_ID: ", PROJECT_ID)
+	log.Printf("[INFO] Project ID: %s", PROJECT_ID)
 
-	// Load the AWS SDK config and create an S3 client
+	// Load AWS SDK config and create an S3 client
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(B2_REGION), // Set your region here
+		config.WithRegion(B2_REGION),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(ACCESSKEYID, SECRETACCESSKEY, "")),
 		config.WithEndpointResolver(aws.EndpointResolverFunc(func(service, region string) (aws.Endpoint, error) {
 			if service == s3.ServiceID && region == B2_REGION {
@@ -98,7 +109,7 @@ func main() {
 		})))
 
 	if err != nil {
-		log.Fatalf("unable to load SDK config, %v", err)
+		log.Fatalf("[ERROR] Unable to load the configuration. Please check your credentials and region: %v", err)
 	}
 
 	s3Client := s3.NewFromConfig(cfg)
@@ -106,117 +117,144 @@ func main() {
 	// Get the current working directory
 	dir, err := os.Getwd()
 	if err != nil {
-		log.Println("Error getting current directory:", err)
+		log.Fatalf("[ERROR] Something went wrong while fetching the directory:", err)
 		return
 	}
 
-	// Set currentDir to the 'output' directory
 	currentDir := filepath.Join(dir, "output")
 
-	// Execute `npm install` and `npm run build` commands in the 'output' directory
-	cmd := exec.Command("npm", "install")
-	cmd.Dir = currentDir // Set the working directory to /home/app/output
+	// Check for Git root directory (optional)
+	rootDir := GIT_ROOT_DIR
+	if rootDir != "" {
+		log.Printf("[INFO] Using root directory: %s", rootDir)
+		currentDir = filepath.Join(currentDir, rootDir)
+	} else {
+		log.Println("[INFO] Using default output directory.")
+	}
 
-	// Capture the stdout and stderr
+	// Set up the commands for installation and build
+	installCmdEnv := INSTALL_CMD
+	if installCmdEnv == "" {
+		installCmdEnv = "npm install"
+	}
+
+	buildCmdEnv := BUILD_CMD
+	if buildCmdEnv == "" {
+		buildCmdEnv = "npm run build"
+	}
+
+	outputDirEnv := OUTPUT_DIR
+	if outputDirEnv == "" {
+		outputDirEnv = "dist"
+	}
+
+	// Step 1: Run the install command
+	log.Printf("[INFO] Running installation... (this might take a minute)")
+
+	cmd := exec.Command("sh", "-c", installCmdEnv)
+	cmd.Dir = currentDir
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Fatalf("Error creating stdout pipe: %v", err)
+		log.Fatalf("[ERROR] There was an issue creating the stdout pipe: %v", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		log.Fatalf("Error creating stderr pipe: %v", err)
+		log.Fatalf("[ERROR] There was an issue creating the stderr pipe: %v", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Fatalf("Error starting npm install command: %v", err)
+		log.Fatalf("[ERROR] Unable to start the installation process: %v", err)
 	}
 
 	// Capture stdout and stderr asynchronously
 	go func() {
-		_, err := io.Copy(os.Stdout, stdout)
+		_, err := io.Copy(log.Writer(), stdout)
 		if err != nil {
-			log.Printf("Error copying stdout: %v", err)
-		}
-	}()
-	go func() {
-		_, err := io.Copy(os.Stderr, stderr)
-		if err != nil {
-			log.Printf("Error copying stderr: %v", err)
+			log.Printf("[WARN] There was a problem copying stdout: %v", err)
 		}
 	}()
 
-	// Wait for npm install to complete
+	go func() {
+		_, err := io.Copy(log.Writer(), stderr)
+		if err != nil {
+			log.Printf("[WARN] There was a problem copying stderr: %v", err)
+		}
+	}()
+
+	// Wait for install to complete
 	if err = cmd.Wait(); err != nil {
-		log.Fatalf("Error waiting for npm install command: %v", err)
+		log.Fatalf("[ERROR] Installation failed. Please check the error and try again: %v", err)
 	}
 
-	// Run `npm run build` after npm install is completed
-	fmt.Println("Running 'npm run build'...")
+	// Step 2: Run the build command
+	log.Printf("[INFO] Installation complete! Now, building your site...")
 
-	cmd = exec.Command("npm", "run", "build")
-	cmd.Dir = currentDir // Set the working directory to /home/app/output
+	cmd = exec.Command("sh", "-c", buildCmdEnv)
+	cmd.Dir = currentDir
 
 	stdout, err = cmd.StdoutPipe()
 	if err != nil {
-		log.Fatalf("Error creating stdout pipe: %v", err)
+		log.Fatalf("[ERROR] Unable to create the stdout pipe for the build process: %v", err)
 	}
 
 	stderr, err = cmd.StderrPipe()
 	if err != nil {
-		log.Fatalf("Error creating stderr pipe: %v", err)
+		log.Fatalf("[ERROR] Unable to create the stderr pipe for the build process: %v", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Fatalf("Error starting npm run build command: %v", err)
+		log.Fatalf("[ERROR] Unable to start the build process: %v", err)
 	}
 
 	// Capture stdout and stderr asynchronously
 	go func() {
 		_, err := io.Copy(os.Stdout, stdout)
 		if err != nil {
-			log.Printf("Error copying stdout: %v", err)
+			log.Printf("[WARN] There was a problem copying stdout during build: %v", err)
 		}
 	}()
+
 	go func() {
 		_, err := io.Copy(os.Stderr, stderr)
 		if err != nil {
-			log.Printf("Error copying stderr: %v", err)
+			log.Printf("[WARN] There was a problem copying stderr during build: %v", err)
 		}
 	}()
 
-	// Wait for npm run build to complete
+	// Wait for build to complete
 	if err = cmd.Wait(); err != nil {
-		log.Fatalf("Error waiting for npm run build command: %v", err)
+		log.Fatalf("[ERROR] Build failed! Please review the error message: %v", err)
 	}
 
-	// Upload the files from the "dist" folder to S3
-	distFolderPath := filepath.Join(dir, "output", "dist")
+	// Step 3: Upload the files to S3 (or Backblaze B2)
+	log.Printf("[INFO] Build completed! Now, uploading your site files...")
+
+	distFolderPath := filepath.Join(dir, "output", outputDirEnv)
 	err = fs.WalkDir(os.DirFS(distFolderPath), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			log.Println("Error walking path:", err)
+			log.Println("[WARN] Unable to access one of the files: ", err)
 			return err
 		}
 
-		// Only upload files (ignore directories)
 		if d.IsDir() {
 			return nil
 		} else {
-			log.Printf("Uploading File: %s\n", path)
-			// Construct the full file path
+			log.Printf("[INFO] Uploading file: %s", path)
 			fullFilePath := filepath.Join(distFolderPath, path)
 
 			err := uploadToS3(fullFilePath, path, s3Client)
 			if err != nil {
-				log.Printf("Failed to upload file: %v, error: %v", path, err)
+				log.Printf("[ERROR] Failed to upload file: %v. Error: %v", path, err)
 				return nil
 			}
 		}
 		return nil
 	})
 
-	log.Println("Build Completed successfully")
-	log.Println("View your live deployment at", LIVE_URL)
+	log.Println("[INFO] Deployment completed successfully!")
+	log.Printf("[INFO] Your site is live! View it here: %s", LIVE_URL)
 }
 
 func uploadToS3(filepath string, originalPath string, client *s3.Client) error {

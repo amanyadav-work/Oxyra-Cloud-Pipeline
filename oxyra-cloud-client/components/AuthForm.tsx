@@ -52,7 +52,7 @@ export function AuthForm({ className, type = "signin", ...props }: AuthFormProps
     const payload: Record<string, any> = {
       email: formValues.email,
       password: formValues.password,
-      rememberMe,
+      remember_me: rememberMe,
     };
 
     if (isSignup && "name" in formValues) {

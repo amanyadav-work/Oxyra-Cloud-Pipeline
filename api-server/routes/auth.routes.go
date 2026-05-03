@@ -26,7 +26,7 @@ func HandleLogin(ctx *gin.Context) {
 	result := DB.Where("email = ?", payload.Email).First(&user)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": formatError("auth", "invalid credentials", "login", "Invalid email or password")})
 			return
 		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": formatError("db", "query failed", "db", fmt.Sprintf("Error checking email existence: %v", result.Error))})
@@ -35,7 +35,7 @@ func HandleLogin(ctx *gin.Context) {
 
 	err := checkPasswordHash(payload.Password, user.Password)
 	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": formatError("auth", "invalid credentials", "login", "Invalid email or password")})
 		return
 	}
 
@@ -45,13 +45,19 @@ func HandleLogin(ctx *gin.Context) {
 		return
 	}
 
-	ctx.SetCookie("authToken", token, 120*60, "/", "", false, true)
+	var cookieExpiry int
+	if payload.RememberMe {
+		cookieExpiry = 30 * 24 * 60 * 60 
+	} else {
+		cookieExpiry = 2 * 60 * 60
+	}
+
+	ctx.SetCookie("authToken", token, cookieExpiry, "/", "", false, true)
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "Login successful", "token": token, "user": user})
 }
 
 func HandleSignup(ctx *gin.Context) {
-
 	var payload models.UserSignup
 
 	if err := ctx.ShouldBindJSON(&payload); err != nil {
@@ -71,7 +77,7 @@ func HandleSignup(ctx *gin.Context) {
 
 	// If the email already exists in the database, return a conflict error
 	if result.Error == nil {
-		ctx.JSON(http.StatusConflict, gin.H{"error": "Email must be unique. This email is already taken."})
+		ctx.JSON(http.StatusConflict, gin.H{"error": formatError("auth", "email already taken", "signup", "Email must be unique. This email is already taken.")})
 		return
 	}
 
@@ -102,4 +108,10 @@ func HandleSignup(ctx *gin.Context) {
 	ctx.SetCookie("authToken", token, 120*60, "/", "", false, true)
 
 	ctx.JSON(http.StatusCreated, gin.H{"message": "User created successfully", "token": token, "user": user})
+}
+
+
+func HandleLogout(ctx *gin.Context) {
+	ctx.SetCookie("authToken", "", -1, "/", "", false, true)
+	ctx.JSON(http.StatusOK, gin.H{"message": "Logout successful"})
 }
